@@ -5,13 +5,14 @@
 //   rank [periods...]    recompute rankings for today (default: all periods)
 //   hot                  discover + snapshot hot + rank daily          (every 2 hours)
 //   daily                snapshot all + rank all periods               (once a day)
-//   flush <file>         send writes queued with QUEUE_FILE, in order, then delete the file
+//   flush <file> [n]     send writes queued with QUEUE_FILE, in order (only the first n lines if given);
+//                        sent lines are removed from the file, which is deleted once empty
 // With QUEUE_FILE=path, writes are appended to that file instead of being sent (reads still hit the worker):
 // collect now, flush later, e.g. while D1's daily write quota is exhausted. Each write carries its own day.
 // GitHub no longer exposes stargazer lists (2026), so star history only accumulates from our own snapshots.
 // Env: GITHUB_TOKEN, WORKER_URL, ADMIN_TOKEN, QUEUE_FILE (optional)
 
-import { appendFileSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS } from "./classify.ts";
 import { fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
 
@@ -42,6 +43,9 @@ async function admin<T = any>(path: string, body?: unknown): Promise<T> {
 
 // ---------- discovery ----------
 
+// Repos already sent (or queued) by this process: the worker cannot see queued ones yet.
+const sentIds = new Set<number>();
+
 /** Keep AI, non-fork, non-archived repos above the star floor, and send the new ones to the worker. */
 async function ingest(candidates: RepoMeta[], label: string) {
   const seen = new Map<number, RepoMeta>();
@@ -52,7 +56,8 @@ async function ingest(candidates: RepoMeta[], label: string) {
   let added = 0;
   for (const part of chunk(ai, 500)) {
     const known = new Set(await admin<number[]>("/admin/known", { ids: part.map((r) => r.id) }));
-    const fresh = part.filter((r) => !known.has(r.id));
+    const fresh = part.filter((r) => !known.has(r.id) && !sentIds.has(r.id));
+    for (const r of fresh) sentIds.add(r.id);
     if (fresh.length) await admin("/admin/repos", { repos: fresh, day: day() });
     added += fresh.length;
   }
@@ -176,7 +181,13 @@ switch (cmd) {
   case "flush": {
     const file = args[0] ?? QUEUE_FILE;
     if (!file) throw new Error("usage: flush <file>");
-    const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+    const all = readFileSync(file, "utf8").split("\n").filter(Boolean);
+    const lines = args[1] ? all.slice(0, Number(args[1])) : all;
+    const keepRest = (sent: number) => {
+      const rest = all.slice(sent);
+      if (rest.length) writeFileSync(file, rest.join("\n") + "\n");
+      else unlinkSync(file);
+    };
     for (const [i, line] of lines.entries()) {
       const { path, body } = JSON.parse(line);
       const res = await fetch(WORKER_URL + path, {
@@ -185,10 +196,13 @@ switch (cmd) {
         body: JSON.stringify(body),
       });
       // Stop at the first failure so the file can be flushed again from the same point.
-      if (!res.ok) throw new Error(`flush stopped at line ${i + 1}/${lines.length}: ${path} → ${res.status}`);
+      if (!res.ok) {
+        keepRest(i);
+        throw new Error(`flush stopped at line ${i + 1}/${lines.length}: ${path} → ${res.status}`);
+      }
     }
-    unlinkSync(file);
-    console.log(`[flush] ${lines.length} writes sent`);
+    keepRest(lines.length);
+    console.log(`[flush] ${lines.length} writes sent, ${all.length - lines.length} left`);
     break;
   }
   case "rank":
