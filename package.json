@@ -1,0 +1,11 @@
+{
+  "name": "ai-trending-collector",
+  "private": true,
+  "type": "module",
+  "description": "Collector for AI Trending: discovers open-source AI repositories and snapshots their GitHub stars and forks.",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "hot": "node collector/run.ts hot",
+    "daily": "node collector/run.ts daily"
+  }
+}

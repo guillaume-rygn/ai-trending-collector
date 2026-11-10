@@ -1,0 +1,42 @@
+name: collect
+
+on:
+  schedule:
+    - cron: "10 */2 * * *" # hot: discovery + hot snapshots + daily ranking, every 2 hours
+    - cron: "40 0 * * *"   # daily: full snapshot of every tracked repo + all rankings
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Collector command (hot, daily, discover, snapshot all, rank, seed <topics>)"
+        default: hot
+
+# One run at a time: overlapping runs would double the D1 writes.
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run collector
+        env:
+          # The built-in token allows 1,000 GraphQL points/hour, enough for ~30k repos.
+          # Set GH_COLLECTOR_TOKEN (fine-grained PAT, public read only) to get 5,000.
+          GITHUB_TOKEN: ${{ secrets.GH_COLLECTOR_TOKEN || github.token }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          COMMAND: ${{ inputs.command }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            node collector/run.ts $COMMAND
+          elif [ "${{ github.event.schedule }}" = "40 0 * * *" ]; then
+            node collector/run.ts daily
+          else
+            node collector/run.ts hot
+          fi
