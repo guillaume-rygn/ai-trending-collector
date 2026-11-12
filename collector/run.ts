@@ -15,6 +15,7 @@
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS } from "./classify.ts";
 import { fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
+import { spamReason } from "./spam.ts";
 
 const WORKER_URL = (process.env.WORKER_URL ?? "http://localhost:8787").replace(/\/$/, "");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "dev-token";
@@ -49,7 +50,13 @@ const sentIds = new Set<number>();
 /** Keep AI, non-fork, non-archived repos above the star floor, and send the new ones to the worker. */
 async function ingest(candidates: RepoMeta[], label: string) {
   const seen = new Map<number, RepoMeta>();
-  for (const r of candidates) if (r.id && !r.is_fork && !r.archived && r.stars >= MIN_STARS) seen.set(r.id, r);
+  let spam = 0;
+  for (const r of candidates) {
+    if (!r.id || r.is_fork || r.archived || r.stars < MIN_STARS) continue;
+    // Owner followers are unknown here: only the bait rule applies. Star farms are caught by snapshots.
+    if (spamReason(r)) spam++;
+    else seen.set(r.id, r);
+  }
   const ai = [...seen.values()]
     .map((r) => ({ ...r, category: classify({ name: r.full_name, description: r.description, topics: r.topics }) }))
     .filter((r) => r.category);
@@ -61,7 +68,7 @@ async function ingest(candidates: RepoMeta[], label: string) {
     if (fresh.length) await admin("/admin/repos", { repos: fresh, day: day() });
     added += fresh.length;
   }
-  console.log(`[${label}] ${candidates.length} candidates, ${ai.length} AI, ${added} new`);
+  console.log(`[${label}] ${candidates.length} candidates, ${ai.length} AI, ${added} new, ${spam} spam skipped`);
   return added;
 }
 
@@ -131,6 +138,7 @@ async function snapshot(scope: "all" | "hot") {
   let after = 0;
   let tracked = 0;
   let changed = 0;
+  let hidden = 0;
   for (;;) {
     const rows = await admin<{ id: number; node_id: string; stars: number; forks: number }[]>(
       `/admin/tracked?scope=${scope}&after=${after}&limit=5000`,
@@ -146,13 +154,28 @@ async function snapshot(scope: "all" | "hot") {
       const results = await Promise.all(
         batches.slice(i, i + 3).map((b) =>
           gql<{ nodes: any[] }>(
-            `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { databaseId stargazerCount forkCount } } }`,
+            `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { databaseId nameWithOwner description stargazerCount forkCount
+              owner { __typename ... on User { followers { totalCount } } } } } }`,
             { ids: b.map((r) => r.node_id) },
           ),
         ),
       );
       for (const n of results.flatMap((r) => r.nodes)) {
         if (!n?.databaseId) continue; // deleted or now private
+        const reason = spamReason({
+          full_name: n.nameWithOwner,
+          description: n.description,
+          stars: n.stargazerCount,
+          owner_type: n.owner?.__typename,
+          owner_followers: n.owner?.followers?.totalCount,
+        });
+        if (reason) {
+          // Hidden repos leave /admin/tracked, so each one is hidden (one D1 write) only once.
+          console.log(`[spam] ${n.nameWithOwner}: ${reason}`);
+          await admin("/admin/hide", { full_name: n.nameWithOwner, hidden: 1 });
+          hidden++;
+          continue;
+        }
         const prev = byId.get(n.databaseId);
         if (prev && (prev.stars !== n.stargazerCount || prev.forks !== n.forkCount))
           updates.push({ id: n.databaseId, stars: n.stargazerCount, forks: n.forkCount });
@@ -161,7 +184,7 @@ async function snapshot(scope: "all" | "hot") {
     for (const part of chunk(updates, 1000)) await admin("/admin/snapshots", { items: part, day: day() });
     changed += updates.length;
   }
-  console.log(`[snapshot ${scope}] ${tracked} tracked, ${changed} changed`);
+  console.log(`[snapshot ${scope}] ${tracked} tracked, ${changed} changed, ${hidden} hidden as spam`);
 }
 
 // ---------- main ----------
