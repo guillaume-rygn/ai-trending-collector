@@ -18,24 +18,29 @@ type Input = { name: string; description: string | null; topics: string[] };
 const rules: [Category, RegExp][] = [
   ["mcp", /\bmcp\b|model[- ]context[- ]protocol|mcp[- ]?server/],
   ["skills", /\bskills?\b.*\b(claude|agent|codex|cursor)|\b(claude|agent|codex)[- ]skills?\b|agent-skills|cursor[- ]?rules|\bclaude\.md\b|\bagents\.md\b|prompt[- ]?(library|collection)|system[- ]prompts?|subagents?|slash[- ]commands?|claude[- ]code[- ]plugins?/],
-  ["coding", /claude[- ]code|codex[- ]cli|coding[- ]agents?|ai[- ]coding|code[- ]assistant|copilot|vibe[- ]?coding|ai[- ]ide|gemini[- ]cli|opencode|aider|cursor\b/],
+  ["coding", /claude[- ]code|codex[- ]cli|coding[- ]agents?|ai[- ]coding|code[- ]assistant|copilot|vibe[- ]?coding|ai[- ]ide|\bcodex\b|gemini[- ]cli|opencode|aider|cursor\b/],
   ["agents", /\bagents?\b|agentic|multi[- ]agent|autonomous|langgraph|crewai|autogen|computer[- ]use|browser[- ]use|a2a\b/],
   ["rag", /\brag\b|retrieval|vector[- ]?(db|database|search|store)|embeddings?|knowledge[- ]graph|graphrag|semantic[- ]search|long[- ]term[- ]memory|agent[- ]memory/],
-  ["models", /\bllama\b|\bvllm\b|inference|fine[- ]?tun|\blora\b|quantiz|gguf|\bonnx\b|transformers?\b|diffusion|text[- ]to[- ](speech|image|video)|\btts\b|speech[- ]to[- ]text|whisper|world[- ]model|reinforcement[- ]learning|\bvlm\b|multimodal|pretrain|distill|\bmoe\b/],
+  ["models", /\bllama\b|\bvllm\b|inference|fine[- ]?tun|\blora\b|quantiz|gguf|\bonnx\b|transformers?\b|diffusion|text[- ]to[- ](speech|image|video)|\btts\b|speech[- ]to[- ]text|speech recognition|\basr\b|whisper|world[- ]model|reinforcement[- ]learning|\bvlm\b|multimodal|pretrain|distill|\bmoe\b/],
   ["apps", /\bllms?\b|\bgpt\b|chatgpt|openai|anthropic|\bclaude\b|gemini|deepseek|qwen|mistral|ollama|\bgenai\b|generative[- ]ai|\bai\b|artificial[- ]intelligence|chatbot|prompt|large[- ]language[- ]model|machine[- ]learning|deep[- ]learning|neural/],
 ];
 
+/** Lowercased, with a dashed variant ("claude-code") and a spaced one ("claude code") so rules can use either. */
+const norm = (parts: string[]) => {
+  const dashed = parts.join(" ").toLowerCase();
+  return [dashed, dashed.replace(/[-_.]/g, " ")];
+};
+const matches = (re: RegExp, texts: string[]) => texts.some((t) => re.test(t));
+
 export function classify({ name, description, topics }: Input): Category | null {
-  // Topics are the strongest signal; name and description fill in for repos without topics.
-  const text = [topics.join(" "), name.replace(/[_/.]/g, " "), description ?? ""]
-    .join(" ")
-    .toLowerCase()
-    .replace(/-/g, " ");
-  const textDashed = [topics.join(" "), name, description ?? ""].join(" ").toLowerCase();
-  for (const [cat, re] of rules) {
-    if (re.test(text) || re.test(textDashed)) return cat;
-  }
-  return null;
+  // The repo name (owner excluded: "MUSE-AI-Lab/x" says nothing about x) and the description say what a repo is;
+  // topics are tag lists ("mcp" sits on n8n, dify and most agent frameworks), so they only break ties.
+  // "apps" is the catch-all: it applies only when no specific category matched anywhere.
+  const own = norm([name.split("/").pop() ?? name, description ?? ""]);
+  const tags = norm(topics);
+  for (const texts of [own, tags]) for (const [cat, re] of rules) if (cat !== "apps" && matches(re, texts)) return cat;
+  const apps = rules.find(([cat]) => cat === "apps")![1];
+  return matches(apps, own) || matches(apps, tags) ? "apps" : null;
 }
 
 // Topics and keyword queries used to discover candidate repositories via GitHub search.
@@ -50,4 +55,12 @@ export const DISCOVERY_TOPICS = [
 
 export const DISCOVERY_KEYWORDS = [
   "agent", "agents", "mcp", "llm", "claude", "codex", "skills", "rag", "gpt", "ai",
+];
+
+// Keywords for the weekly sweep of established repos (any creation date). Many popular AI repos carry no topics
+// (anthropics/claude-code, openai/codex, karpathy/nanochat), so topic search alone misses them.
+export const SWEEP_KEYWORDS = [
+  ...DISCOVERY_KEYWORDS, "language model", "inference", "diffusion", "speech", "chatbot", "copilot", "embedding",
+  "transformer", "neural", "machine learning", "deep learning", "openai", "anthropic", "gemini", "deepseek", "qwen",
+  "ollama", "whisper", "model context protocol",
 ];

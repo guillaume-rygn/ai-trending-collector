@@ -4,10 +4,11 @@ on:
   schedule:
     - cron: "10 */2 * * *" # hot: discovery + hot snapshots + daily ranking, every 2 hours
     - cron: "40 0 * * *"   # daily: full snapshot of every tracked repo + all rankings
+    - cron: "20 3 * * 0"   # weekly sweep: established AI repos of any age (keyword + topic search)
   workflow_dispatch:
     inputs:
       command:
-        description: "Collector command (hot, daily, discover, snapshot all, rank, seed <topics>)"
+        description: "Collector command (hot, daily, discover, sweep [minStars], reclassify, snapshot all, rank, seed <topics>)"
         default: hot
 
 # One run at a time: overlapping runs would double the D1 writes.
@@ -37,6 +38,8 @@ jobs:
             node collector/run.ts $COMMAND
           elif [ "${{ github.event.schedule }}" = "40 0 * * *" ]; then
             node collector/run.ts daily
+          elif [ "${{ github.event.schedule }}" = "20 3 * * 0" ]; then
+            node collector/run.ts sweep
           else
             node collector/run.ts hot
           fi

@@ -1,6 +1,8 @@
 // Collector entry point. Usage: node collector/run.ts <command> [args]
 //   seed [topic...]      one-off: index every AI repo with >= MIN_STARS via topic search
 //   discover             new/recent AI repos (keyword + topic search) and GitHub Trending
+//   sweep [minStars]     established AI repos of any age by keyword + topic (default 100 stars; weekly)
+//   reclassify           re-run the classifier on every tracked repo with fresh metadata; hide non-AI ones
 //   snapshot [all|hot]   fetch star/fork counts and store the ones that changed
 //   rank [periods...]    recompute rankings for today (default: all periods)
 //   hot                  discover + snapshot hot + rank daily          (every 2 hours)
@@ -13,7 +15,7 @@
 // Env: GITHUB_TOKEN, WORKER_URL, ADMIN_TOKEN, QUEUE_FILE (optional)
 
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS } from "./classify.ts";
+import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS, SWEEP_KEYWORDS } from "./classify.ts";
 import { fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
 import { spamReason } from "./spam.ts";
 
@@ -26,7 +28,7 @@ const daysAgo = (n: number) => day(new Date(Date.now() - n * 864e5));
 const chunk = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
 const QUEUE_FILE = process.env.QUEUE_FILE;
-const WRITE_PATHS = new Set(["/admin/repos", "/admin/snapshots", "/admin/rank", "/admin/hide"]);
+const WRITE_PATHS = new Set(["/admin/repos", "/admin/snapshots", "/admin/rank", "/admin/hide", "/admin/categories"]);
 
 async function admin<T = any>(path: string, body?: unknown): Promise<T> {
   if (QUEUE_FILE && WRITE_PATHS.has(path)) {
@@ -131,6 +133,58 @@ async function discover() {
   await ingest(await reposByName(trending), `github trending (${trending.length})`);
 }
 
+/** Repos of any age above `minStars`, pushed within a year: catches popular repos discovery never saw. */
+async function sweep(minStars: number) {
+  const base = `fork:false archived:false pushed:>=${daysAgo(365)}`;
+  for (const k of SWEEP_KEYWORDS) {
+    const q = k.includes(" ") ? `"${k}"` : k;
+    await ingest(await searchAll(`${q} in:name,description ${base}`, minStars), `sweep "${k}"`);
+  }
+  for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`);
+}
+
+/** Applies the current classifier to every tracked repo, using fresh name/description/topics. */
+async function reclassify() {
+  let after = 0;
+  const changes: { id: number; category: string }[] = [];
+  const notAi: number[] = [];
+  const moves = new Map<string, number>();
+  for (;;) {
+    const rows = await admin<{ id: number; node_id: string; category: string }[]>(`/admin/tracked?scope=all&after=${after}&limit=5000`);
+    if (!rows.length) break;
+    after = rows[rows.length - 1].id;
+    const batches = chunk(rows, 100);
+    for (let i = 0; i < batches.length; i += 3) {
+      const group = batches.slice(i, i + 3);
+      const results = await Promise.all(
+        group.map((b) =>
+          gql<{ nodes: any[] }>(
+            `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { nameWithOwner description
+              repositoryTopics(first: 20) { nodes { topic { name } } } } } }`,
+            { ids: b.map((r) => r.node_id) },
+          ),
+        ),
+      );
+      const pairs = group.flatMap((b, j) => b.map((row, k) => [row, results[j].nodes[k]] as const));
+      for (const [row, n] of pairs) {
+        if (!n?.nameWithOwner) continue; // deleted/private: the next snapshot hides it
+        const topics = n.repositoryTopics.nodes.map((t: any) => t.topic.name);
+        const category = classify({ name: n.nameWithOwner, description: n.description, topics });
+        if (!category) notAi.push(row.id);
+        else if (category !== row.category) {
+          changes.push({ id: row.id, category });
+          const key = `${row.category}->${category}`;
+          moves.set(key, (moves.get(key) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  for (const part of chunk(changes, 1000)) await admin("/admin/categories", { items: part });
+  for (const part of chunk(notAi, 1000)) await admin("/admin/hide", { ids: part });
+  console.log(`[reclassify] ${changes.length} recategorized, ${notAi.length} no longer AI (hidden)`);
+  console.log([...moves].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(", "));
+}
+
 // ---------- snapshots ----------
 
 async function snapshot(scope: "all" | "hot") {
@@ -195,6 +249,12 @@ switch (cmd) {
     break;
   case "discover":
     await discover();
+    break;
+  case "sweep":
+    await sweep(Number(args[0] ?? 100));
+    break;
+  case "reclassify":
+    await reclassify();
     break;
   case "snapshot":
     await snapshot((args[0] as "all" | "hot") ?? "hot");

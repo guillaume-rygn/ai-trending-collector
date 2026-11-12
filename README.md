@@ -2,7 +2,7 @@
 
 Discovers open-source AI repositories (agents, MCP, skills, coding agents, RAG, models, AI apps) and snapshots
 their GitHub stars and forks for [AI Trending](https://ai-trending.autolabel.workers.dev). Rankings use
-`stars gained + 2 × forks gained`.
+`stars gained + forks gained` (forks capped at half the stars gained).
 
 - **Discovery**: GitHub search on AI topics and keywords, plus github.com/trending. `collector/classify.ts`
   decides whether a repo is AI and which category it belongs to.
