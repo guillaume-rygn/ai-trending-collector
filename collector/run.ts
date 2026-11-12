@@ -1,7 +1,7 @@
 // Collector entry point. Usage: node collector/run.ts <command> [args]
 //   seed [topic...]      one-off: index every AI repo with >= MIN_STARS via topic search
 //   discover             new/recent AI repos (keyword + topic search) and GitHub Trending
-//   sweep [minStars]     established AI repos of any age by keyword + topic (default 100 stars; weekly)
+//   sweep [minStars]     established AI repos of any age by keyword + topic (default MIN_STARS; weekly)
 //   reclassify           re-run the classifier on every tracked repo with fresh metadata; hide non-AI ones
 //   snapshot [all|hot]   fetch star/fork counts and store the ones that changed
 //   rank [periods...]    recompute rankings for today (default: all periods)
@@ -260,7 +260,7 @@ switch (cmd) {
     await discover();
     break;
   case "sweep":
-    await sweep(Number(args[0] ?? 100));
+    await sweep(Number(args[0] ?? MIN_STARS));
     break;
   case "reclassify":
     await reclassify();
