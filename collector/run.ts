@@ -25,6 +25,10 @@ const MIN_STARS = Number(process.env.MIN_STARS ?? 20);
 
 const day = (d = new Date()) => d.toISOString().slice(0, 10);
 const daysAgo = (n: number) => day(new Date(Date.now() - n * 864e5));
+// Day a count observed now belongs to. A count read shortly after midnight UTC (the daily sweep runs at 00:40,
+// later when GitHub delays it) is the previous day's closing count: labelling it with the new day moved every
+// once-a-day repo's gains to the following day.
+const obsDay = () => day(new Date(Date.now() - 3 * 3600e3));
 const chunk = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
 const QUEUE_FILE = process.env.QUEUE_FILE;
@@ -67,7 +71,7 @@ async function ingest(candidates: RepoMeta[], label: string, minAppsStars = 0) {
     const known = new Set(await admin<number[]>("/admin/known", { ids: part.map((r) => r.id) }));
     const fresh = part.filter((r) => !known.has(r.id) && !sentIds.has(r.id));
     for (const r of fresh) sentIds.add(r.id);
-    if (fresh.length) await admin("/admin/repos", { repos: fresh, day: day() });
+    if (fresh.length) await admin("/admin/repos", { repos: fresh, day: obsDay() });
     added += fresh.length;
   }
   console.log(`[${label}] ${candidates.length} candidates, ${ai.length} AI, ${added} new, ${spam} spam skipped`);
@@ -130,8 +134,13 @@ async function discover() {
   for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
   await ingest(items, "discover search");
 
-  const trending = await githubTrending();
-  await ingest(await reposByName(trending), `github trending (${trending.length})`);
+  const trending = await reposByName(await githubTrending());
+  await ingest(trending, `github trending (${trending.length})`);
+  // A tracked repo that starts trending may sit outside the hot set (only snapshotted once a day): record its
+  // counts now, or it would only reach today's ranking tomorrow. Non-AI trending repos are not tracked: skipped.
+  const known = new Set(await admin<number[]>("/admin/known", { ids: trending.map((r) => r.id) }));
+  const counts = trending.filter((r) => known.has(r.id) || sentIds.has(r.id)).map((r) => ({ id: r.id, stars: r.stars, forks: r.forks }));
+  if (counts.length) await admin("/admin/snapshots", { items: counts, day: obsDay() });
 }
 
 /** In a sweep sample, half the "apps" below this were off-niche (tensorflow/docs, subscription trackers...). */
@@ -237,7 +246,7 @@ async function snapshot(scope: "all" | "hot") {
     // Hidden repos leave /admin/tracked, so each one costs a single D1 write.
     for (const part of chunk(gone, 1000)) await admin("/admin/hide", { ids: part });
     hidden += gone.length;
-    for (const part of chunk(updates, 1000)) await admin("/admin/snapshots", { items: part, day: day() });
+    for (const part of chunk(updates, 1000)) await admin("/admin/snapshots", { items: part, day: obsDay() });
     changed += updates.length;
   }
   console.log(`[snapshot ${scope}] ${tracked} tracked, ${changed} changed, ${hidden} hidden (spam, deleted or private)`);
@@ -291,19 +300,20 @@ switch (cmd) {
     break;
   }
   case "rank":
-    console.log(await admin("/admin/rank", { day: day(), periods: args.length ? args : undefined }));
+    console.log(await admin("/admin/rank", { day: obsDay(), periods: args.length ? args : undefined }));
     break;
   case "hot":
     await discover();
     await snapshot("hot");
     // Weekly and monthly windows move slowly: refresh them every 6 hours to save D1 writes.
-    console.log(await admin("/admin/rank", { day: day(), periods: new Date().getUTCHours() % 6 < 2 ? undefined : ["daily"] }));
+    console.log(await admin("/admin/rank", { day: obsDay(), periods: new Date().getUTCHours() % 6 < 2 ? undefined : ["daily"] }));
     break;
   case "daily":
     await snapshot("all");
-    // Finalize yesterday's daily ranking, then compute today's windows.
-    console.log(await admin("/admin/rank", { day: daysAgo(1), periods: ["daily"] }));
-    console.log(await admin("/admin/rank", { day: day() }));
+    // Before 03:00 UTC this closes yesterday: its daily ranking becomes final and the windows end on it.
+    // When GitHub starts the job later than that, yesterday's daily ranking is still recomputed.
+    if (obsDay() !== daysAgo(1)) console.log(await admin("/admin/rank", { day: daysAgo(1), periods: ["daily"] }));
+    console.log(await admin("/admin/rank", { day: obsDay() }));
     break;
   default:
     console.error(`unknown command ${cmd}`);
