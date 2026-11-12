@@ -50,7 +50,7 @@ async function admin<T = any>(path: string, body?: unknown): Promise<T> {
 const sentIds = new Set<number>();
 
 /** Keep AI, non-fork, non-archived repos above the star floor, and send the new ones to the worker. */
-async function ingest(candidates: RepoMeta[], label: string) {
+async function ingest(candidates: RepoMeta[], label: string, minAppsStars = 0) {
   const seen = new Map<number, RepoMeta>();
   let spam = 0;
   for (const r of candidates) {
@@ -60,7 +60,8 @@ async function ingest(candidates: RepoMeta[], label: string) {
   }
   const ai = [...seen.values()]
     .map((r) => ({ ...r, category: classify({ name: r.full_name, description: r.description, topics: r.topics }) }))
-    .filter((r) => r.category);
+    // "apps" is the catch-all category, the least precise: the sweep only keeps its big repos.
+    .filter((r) => r.category && (r.category !== "apps" || r.stars >= minAppsStars));
   let added = 0;
   for (const part of chunk(ai, 500)) {
     const known = new Set(await admin<number[]>("/admin/known", { ids: part.map((r) => r.id) }));
@@ -133,14 +134,17 @@ async function discover() {
   await ingest(await reposByName(trending), `github trending (${trending.length})`);
 }
 
+/** In a sweep sample, half the "apps" below this were off-niche (tensorflow/docs, subscription trackers...). */
+const SWEEP_MIN_APPS_STARS = 1000;
+
 /** Repos of any age above `minStars`, pushed within a year: catches popular repos discovery never saw. */
 async function sweep(minStars: number) {
   const base = `fork:false archived:false pushed:>=${daysAgo(365)}`;
   for (const k of SWEEP_KEYWORDS) {
     const q = k.includes(" ") ? `"${k}"` : k;
-    await ingest(await searchAll(`${q} in:name,description ${base}`, minStars), `sweep "${k}"`);
+    await ingest(await searchAll(`${q} in:name,description ${base}`, minStars), `sweep "${k}"`, SWEEP_MIN_APPS_STARS);
   }
-  for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`);
+  for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`, SWEEP_MIN_APPS_STARS);
 }
 
 /** Applies the current classifier to every tracked repo, using fresh name/description/topics. */
