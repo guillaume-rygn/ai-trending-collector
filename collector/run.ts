@@ -65,7 +65,7 @@ async function ingest(candidates: RepoMeta[], label: string, minAppsStars = 0) {
   const ai = [...seen.values()]
     .map((r) => ({ ...r, category: classify({ name: r.full_name, description: r.description, topics: r.topics }) }))
     // "apps" is the catch-all category, the least precise: the sweep only keeps its big repos.
-    .filter((r) => r.category && (r.category !== "apps" || r.stars >= minAppsStars));
+    .filter((r) => r.category && (r.category !== "apps" || r.stars >= minAppsStars || r.created_at >= daysAgo(90)));
   let added = 0;
   for (const part of chunk(ai, 500)) {
     const known = new Set(await admin<number[]>("/admin/known", { ids: part.map((r) => r.id) }));
@@ -122,14 +122,9 @@ async function githubTrending(): Promise<string[]> {
 async function discover() {
   const since = daysAgo(14);
   const items: RepoMeta[] = [];
-  for (const k of DISCOVERY_KEYWORDS) {
-    const r = await searchRepos(`${k} in:name,description,topics created:>=${since} stars:>=${MIN_STARS} fork:false`);
-    items.push(...r.items.map(fromSearch));
-  }
-  for (const t of DISCOVERY_TOPICS) {
-    const r = await searchRepos(`topic:${t} created:>=${since} stars:>=${MIN_STARS} fork:false`);
-    items.push(...r.items.map(fromSearch));
-  }
+  // Every page, not just the first: "ai" alone matches ~600 repos created in 14 days.
+  for (const k of DISCOVERY_KEYWORDS) items.push(...(await searchAll(`${k} in:name,description,topics created:>=${since} fork:false`)));
+  for (const t of DISCOVERY_TOPICS) items.push(...(await searchAll(`topic:${t} created:>=${since} fork:false`)));
   // Any new repo that took off, AI keywords or not: the classifier decides.
   for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
   await ingest(items, "discover search");
@@ -143,7 +138,8 @@ async function discover() {
   if (counts.length) await admin("/admin/snapshots", { items: counts, day: obsDay() });
 }
 
-/** In a sweep sample, half the "apps" below this were off-niche (tensorflow/docs, subscription trackers...). */
+/** In a sweep sample, half the older "apps" below this were off-niche (tensorflow/docs, subscription trackers...).
+ * Repos created in the last 90 days are kept regardless: a young repo with a few hundred stars is still climbing. */
 const SWEEP_MIN_APPS_STARS = 1000;
 
 /** Repos of any age above `minStars`, pushed within a year: catches popular repos discovery never saw. */

@@ -21,7 +21,7 @@ const rules: [Category, RegExp][] = [
   ["coding", /claude[- ]code|codex[- ]cli|coding[- ]agents?|ai[- ]coding|code[- ]assistant|copilot|vibe[- ]?coding|ai[- ]ide|\bcodex\b|gemini[- ]cli|opencode|aider|cursor\b/],
   ["agents", /\bagents?\b|agentic|multi[- ]agent|autonomous|langgraph|crewai|autogen|computer[- ]use|browser[- ]use|a2a\b/],
   ["rag", /\brag\b|retrieval|vector[- ]?(db|database|search|store)|embeddings?|knowledge[- ]graph|graphrag|semantic[- ]search|long[- ]term[- ]memory|agent[- ]memory/],
-  ["models", /\bllama\b|\bvllm\b|inference|fine[- ]?tun|\blora\b|quantiz|gguf|\bonnx\b|transformers?\b|diffusion|text[- ]to[- ](speech|image|video)|\btts\b|speech[- ]to[- ]text|speech recognition|\basr\b|whisper|world[- ]model|reinforcement[- ]learning|\bvlm\b|multimodal|pretrain|distill|\bmoe\b/],
+  ["models", /\bllama\b|\bvllm\b|inference|fine[- ]?tun|\blora\b|quantiz|gguf|\bonnx\b|transformers?\b|diffusion|text[- ]to[- ](speech|image|video)|\btts\b|speech[- ]to[- ]text|speech recognition|\basr\b|whisper|world[- ]model|foundation[- ]models?|image[- ]generation|video[- ]generation|vision[- ]language|reinforcement[- ]learning|\bvlm\b|multimodal|pretrain|distill|\bmoe\b/],
   ["apps", /\bllms?\b|\bgpt\b|chatgpt|openai|anthropic|\bclaude\b|gemini|deepseek|qwen|mistral|ollama|\bgenai\b|generative[- ]ai|\bai\b|artificial[- ]intelligence|chatbot|prompt|large[- ]language[- ]model|machine[- ]learning|deep[- ]learning|neural/],
 ];
 
@@ -62,5 +62,6 @@ export const DISCOVERY_KEYWORDS = [
 export const SWEEP_KEYWORDS = [
   ...DISCOVERY_KEYWORDS, "language model", "inference", "diffusion", "speech", "chatbot", "copilot", "embedding",
   "transformer", "neural", "machine learning", "deep learning", "openai", "anthropic", "gemini", "deepseek", "qwen",
-  "ollama", "whisper", "model context protocol",
+  "ollama", "whisper", "model context protocol", "vlm", "foundation model", "image generation", "video generation",
+  "vision language",
 ];
