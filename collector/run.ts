@@ -1,7 +1,7 @@
 // Collector entry point. Usage: node collector/run.ts <command> [args]
 //   seed [topic...]      one-off: index every AI repo with >= MIN_STARS via topic search
 //   discover             new/recent AI repos (keyword + topic search) and GitHub Trending
-//   sweep [minStars]     established AI repos of any age by keyword + topic (default MIN_STARS; weekly)
+//   sweep [minStars] [keywords|topics]  established AI repos of any age by keyword + topic (default MIN_STARS, both; weekly)
 //   reclassify           re-run the classifier on every tracked repo with fresh metadata; hide non-AI ones
 //   snapshot [all|hot]   fetch star/fork counts and store the ones that changed
 //   rank [periods...]    recompute rankings for today (default: all periods)
@@ -143,13 +143,13 @@ async function discover() {
 const SWEEP_MIN_APPS_STARS = 1000;
 
 /** Repos of any age above `minStars`, pushed within a year: catches popular repos discovery never saw. */
-async function sweep(minStars: number) {
+async function sweep(minStars: number, only?: string) {
   const base = `fork:false archived:false pushed:>=${daysAgo(365)}`;
-  for (const k of SWEEP_KEYWORDS) {
+  if (only !== "topics") for (const k of SWEEP_KEYWORDS) {
     const q = k.includes(" ") ? `"${k}"` : k;
     await ingest(await searchAll(`${q} in:name,description ${base}`, minStars), `sweep "${k}"`, SWEEP_MIN_APPS_STARS);
   }
-  for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`, SWEEP_MIN_APPS_STARS);
+  if (only !== "keywords") for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`, SWEEP_MIN_APPS_STARS);
 }
 
 /** Applies the current classifier to every tracked repo, using fresh name/description/topics. */
@@ -260,7 +260,7 @@ switch (cmd) {
     await discover();
     break;
   case "sweep":
-    await sweep(Number(args[0] ?? MIN_STARS));
+    await sweep(Number(args[0] ?? MIN_STARS), args[1]);
     break;
   case "reclassify":
     await reclassify();

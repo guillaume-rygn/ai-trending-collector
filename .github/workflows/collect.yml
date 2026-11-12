@@ -19,7 +19,8 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # The weekly sweep down to 20 stars searches ~45 keywords and topics: over 2 hours. 360 is GitHub's maximum.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
