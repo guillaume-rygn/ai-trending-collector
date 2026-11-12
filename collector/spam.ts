@@ -1,13 +1,12 @@
-// Spam and fake-star detection. Two signals, both cheap:
-// 1. Name/description: pirated-software and game-cheat bait ("Capcut Pro For Windows", "Revit 2026 pre-configured
-//    environment", "Aion 2 trainer"). These repos usually ship malware in a release zip.
-// 2. Bought stars: a personal account with (almost) no followers whose repo collects hundreds of stars.
-//    Real projects that popular gain followers for their author; star-farm campaigns use throwaway accounts.
+// Spam detection on name/description: pirated-software and game-cheat bait ("Capcut Pro For Windows", "Revit 2026
+// pre-configured environment", "Aion 2 trainer"). These repos usually ship malware in a release zip.
+// An owner-followers rule (few followers + many stars = star farm) was tried and dropped: hundreds of legitimate
+// repos (read-frog, slack-mcp-server, mcp-proxy...) belong to authors with 0-2 followers.
 // Flagged repos are hidden, not deleted: `POST /admin/hide {"full_name", "hidden": 0}` + ALLOW restores one.
 
 const BAIT = new RegExp(
   [
-    String.raw`\bcrack(ed|s)?\b`,
+    String.raw`\bcrack(ed)? (version|software|download)\b`,
     String.raw`\bkeygen\b`,
     String.raw`\bactivat(or|ion key)\b`,
     String.raw`\b(license|serial|product) keys?\b`,
@@ -25,19 +24,12 @@ const BAIT = new RegExp(
   "i",
 );
 
-/** Stars above which a near-zero-follower personal account is treated as a star farm. */
-const FARM_STARS = 100;
-const FARM_MAX_FOLLOWERS = 2;
-
 /** Repos verified by hand as legitimate despite matching a rule. */
 const ALLOW = new Set<string>([]);
 
 export type SpamInput = {
   full_name: string;
   description?: string | null;
-  stars: number;
-  owner_type?: string; // "User" | "Organization"
-  owner_followers?: number | null;
 };
 
 export function spamReason(r: SpamInput): string | null {
@@ -45,7 +37,5 @@ export function spamReason(r: SpamInput): string | null {
   const text = `${r.full_name.replace(/[/_-]/g, " ")} ${r.description ?? ""}`;
   const bait = text.match(BAIT);
   if (bait) return `bait "${bait[0]}"`;
-  if (r.owner_type === "User" && r.owner_followers != null && r.owner_followers <= FARM_MAX_FOLLOWERS && r.stars >= FARM_STARS)
-    return `star farm (${r.stars} stars, owner has ${r.owner_followers} followers)`;
   return null;
 }

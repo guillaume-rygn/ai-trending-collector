@@ -53,7 +53,6 @@ async function ingest(candidates: RepoMeta[], label: string) {
   let spam = 0;
   for (const r of candidates) {
     if (!r.id || r.is_fork || r.archived || r.stars < MIN_STARS) continue;
-    // Owner followers are unknown here: only the bait rule applies. Star farms are caught by snapshots.
     if (spamReason(r)) spam++;
     else seen.set(r.id, r);
   }
@@ -146,45 +145,44 @@ async function snapshot(scope: "all" | "hot") {
     if (!rows.length) break;
     after = rows[rows.length - 1].id;
     tracked += rows.length;
-    const byId = new Map(rows.map((r) => [r.id, r]));
     const updates: { id: number; stars: number; forks: number }[] = [];
     const batches = chunk(rows, 100);
+    const gone: number[] = [];
     // 3 GraphQL requests in flight keeps us well under GitHub's secondary rate limits.
     for (let i = 0; i < batches.length; i += 3) {
+      const group = batches.slice(i, i + 3);
       const results = await Promise.all(
-        batches.slice(i, i + 3).map((b) =>
+        group.map((b) =>
           gql<{ nodes: any[] }>(
-            `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { databaseId nameWithOwner description stargazerCount forkCount
-              owner { __typename ... on User { followers { totalCount } } } } } }`,
+            `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { databaseId nameWithOwner description stargazerCount forkCount } } }`,
             { ids: b.map((r) => r.node_id) },
           ),
         ),
       );
-      for (const n of results.flatMap((r) => r.nodes)) {
-        if (!n?.databaseId) continue; // deleted or now private
-        const reason = spamReason({
-          full_name: n.nameWithOwner,
-          description: n.description,
-          stars: n.stargazerCount,
-          owner_type: n.owner?.__typename,
-          owner_followers: n.owner?.followers?.totalCount,
-        });
-        if (reason) {
-          // Hidden repos leave /admin/tracked, so each one is hidden (one D1 write) only once.
-          console.log(`[spam] ${n.nameWithOwner}: ${reason}`);
-          await admin("/admin/hide", { full_name: n.nameWithOwner, hidden: 1 });
-          hidden++;
+      // nodes() answers positionally, with null for a repo that was deleted or made private.
+      const pairs = group.flatMap((b, j) => b.map((row, k) => [row, results[j].nodes[k]] as const));
+      for (const [row, n] of pairs) {
+        if (!n?.databaseId) {
+          gone.push(row.id);
           continue;
         }
-        const prev = byId.get(n.databaseId);
-        if (prev && (prev.stars !== n.stargazerCount || prev.forks !== n.forkCount))
-          updates.push({ id: n.databaseId, stars: n.stargazerCount, forks: n.forkCount });
+        const reason = spamReason({ full_name: n.nameWithOwner, description: n.description });
+        if (reason) {
+          console.log(`[spam] ${n.nameWithOwner}: ${reason}`);
+          gone.push(row.id);
+          continue;
+        }
+        if (row.stars !== n.stargazerCount || row.forks !== n.forkCount)
+          updates.push({ id: row.id, stars: n.stargazerCount, forks: n.forkCount });
       }
     }
+    // Hidden repos leave /admin/tracked, so each one costs a single D1 write.
+    for (const part of chunk(gone, 1000)) await admin("/admin/hide", { ids: part });
+    hidden += gone.length;
     for (const part of chunk(updates, 1000)) await admin("/admin/snapshots", { items: part, day: day() });
     changed += updates.length;
   }
-  console.log(`[snapshot ${scope}] ${tracked} tracked, ${changed} changed, ${hidden} hidden as spam`);
+  console.log(`[snapshot ${scope}] ${tracked} tracked, ${changed} changed, ${hidden} hidden (spam, deleted or private)`);
 }
 
 // ---------- main ----------
