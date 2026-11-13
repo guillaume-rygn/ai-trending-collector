@@ -7,16 +7,38 @@ if (!TOKEN) throw new Error("GITHUB_TOKEN is required");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export let pointsUsed = 0;
 
+/** Retries a fetch on network errors (a dropped connection used to kill a whole run). */
+export async function fetchRetry(url: string, init?: RequestInit, tries = 4): Promise<Response> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      if (i >= tries) throw e;
+      console.warn(`network error on ${new URL(url).pathname} (${String(e)}), retrying`);
+      await sleep(2 ** i * 2000);
+    }
+  }
+}
+
 async function request(url: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      accept: "application/vnd.github+json",
-      "user-agent": "ai-trending-collector",
-      ...(init.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        accept: "application/vnd.github+json",
+        "user-agent": "ai-trending-collector",
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    // Dropped connection ("TypeError: terminated"): retry instead of losing the whole run.
+    if (attempt >= 4) throw e;
+    console.warn(`GitHub network error (${String(e)}), retrying`);
+    await sleep(2 ** attempt * 2000);
+    return request(url, init, attempt + 1);
+  }
   if (res.status === 403 || res.status === 429 || res.status >= 500) {
     if (attempt >= 6) throw new Error(`GitHub ${res.status} after retries: ${await res.text()}`);
     const reset = Number(res.headers.get("x-ratelimit-reset") ?? 0) * 1000;

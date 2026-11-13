@@ -5,7 +5,7 @@
 //   reclassify           re-run the classifier on every tracked repo with fresh metadata; hide non-AI ones
 //   snapshot [all|hot]   fetch star/fork counts and store the ones that changed
 //   rank [periods...]    recompute rankings for today (default: all periods)
-//   hot                  discover + snapshot hot + rank daily          (every 2 hours)
+//   hot                  discover + snapshot all + rank daily          (every 2 hours)
 //   daily                snapshot all + rank all periods               (once a day)
 //   flush <file> [n]     send writes queued with QUEUE_FILE, in order (only the first n lines if given);
 //                        sent lines are removed from the file, which is deleted once empty
@@ -16,7 +16,7 @@
 
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS, SWEEP_KEYWORDS } from "./classify.ts";
-import { fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
+import { fetchRetry, fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
 import { spamReason } from "./spam.ts";
 
 const WORKER_URL = (process.env.WORKER_URL ?? "http://localhost:8787").replace(/\/$/, "");
@@ -39,7 +39,7 @@ async function admin<T = any>(path: string, body?: unknown): Promise<T> {
     appendFileSync(QUEUE_FILE, JSON.stringify({ path, body }) + "\n");
     return { queued: true } as T;
   }
-  const res = await fetch(WORKER_URL + path, {
+  const res = await fetchRetry(WORKER_URL + path, {
     method: body === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -109,14 +109,30 @@ async function seed(topics: string[]) {
   }
 }
 
-async function githubTrending(): Promise<string[]> {
-  const names = new Set<string>();
-  for (const since of ["daily", "weekly", "monthly"]) {
-    const res = await fetch(`https://github.com/trending?since=${since}`, { headers: { "user-agent": "Mozilla/5.0" } });
-    const htmlText = await res.text();
-    for (const m of htmlText.matchAll(/<h2 class="h3 lh-condensed">\s*<a[^>]*href="\/([\w.-]+\/[\w.-]+)"/g)) names.add(m[1]);
+// The main Trending page lists 25 repos: a small repo that takes off in Python or TypeScript often only shows
+// on its language's page. Daily pages only: that is where a sudden spike appears.
+const TRENDING_LANGUAGES = ["python", "typescript", "javascript", "jupyter-notebook", "rust", "go", "c++", "shell", "swift", "html", "java", "c"];
+
+/** Repos on GitHub Trending, with "stars today" from the daily pages (lowercase name → stars today, or null). */
+async function githubTrending(): Promise<Map<string, number | null>> {
+  const found = new Map<string, number | null>();
+  const pages = [
+    ...["daily", "weekly", "monthly"].map((since) => `https://github.com/trending?since=${since}`),
+    ...TRENDING_LANGUAGES.map((l) => `https://github.com/trending/${encodeURIComponent(l)}?since=daily`),
+  ];
+  for (const url of pages) {
+    const res = await fetchRetry(url, { headers: { "user-agent": "Mozilla/5.0" } }).catch(() => null);
+    if (!res?.ok) continue;
+    const daily = url.endsWith("since=daily");
+    for (const article of (await res.text()).split('<article class="Box-row">').slice(1)) {
+      const name = article.match(/<h2 class="h3 lh-condensed">\s*<a[^>]*href="\/([\w.-]+\/[\w.-]+)"/)?.[1]?.toLowerCase();
+      if (!name) continue;
+      const today = daily ? article.match(/([\d,]+)\s+stars?\s+today/)?.[1] : undefined;
+      if (today) found.set(name, Number(today.replace(/,/g, "")));
+      else if (!found.has(name)) found.set(name, null);
+    }
   }
-  return [...names];
+  return found;
 }
 
 async function discover() {
@@ -129,7 +145,13 @@ async function discover() {
   for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
   await ingest(items, "discover search");
 
-  const trending = await reposByName(await githubTrending());
+  const trendingNames = await githubTrending();
+  // Yesterday's count of a repo first seen while trending: without it, its first observation (already after the
+  // spike) would be the baseline and today's gain would be 0.
+  const trending = (await reposByName([...trendingNames.keys()])).map((r) => {
+    const today = trendingNames.get(r.full_name.toLowerCase());
+    return today == null ? r : { ...r, stars_before: Math.max(0, r.stars - today) };
+  });
   await ingest(trending, `github trending (${trending.length})`);
   // A tracked repo that starts trending may sit outside the hot set (only snapshotted once a day): record its
   // counts now, or it would only reach today's ranking tomorrow. Non-AI trending repos are not tracked: skipped.
@@ -300,7 +322,9 @@ switch (cmd) {
     break;
   case "hot":
     await discover();
-    await snapshot("hot");
+    // Every tracked repo, not only recently ranked ones: a 20-star repo that gains 500 must reach today's ranking
+    // within 2 hours, not after the nightly snapshot. ~740 GraphQL points for 74k repos, under the 1,000/hour token.
+    await snapshot("all");
     // Weekly and monthly windows move slowly: refresh them every 6 hours to save D1 writes.
     console.log(await admin("/admin/rank", { day: obsDay(), periods: new Date().getUTCHours() % 6 < 2 ? undefined : ["daily"] }));
     break;
