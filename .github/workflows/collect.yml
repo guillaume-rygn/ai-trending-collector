@@ -2,7 +2,8 @@ name: collect
 
 on:
   schedule:
-    - cron: "10 */2 * * *" # hot: discovery + hot snapshots + daily ranking, every 2 hours
+    # hot (every 2 hours) is started by the Cloudflare Worker through workflow_dispatch: GitHub's own schedule
+    # skipped most of those runs (3 to 5 a day instead of 12).
     - cron: "40 0 * * *"   # daily: full snapshot of every tracked repo + all rankings
     - cron: "20 3 * * 0"   # weekly sweep: established AI repos of any age (keyword + topic search)
   workflow_dispatch:
@@ -39,8 +40,6 @@ jobs:
             node collector/run.ts $COMMAND
           elif [ "${{ github.event.schedule }}" = "40 0 * * *" ]; then
             node collector/run.ts daily
-          elif [ "${{ github.event.schedule }}" = "20 3 * * 0" ]; then
-            node collector/run.ts sweep
           else
-            node collector/run.ts hot
+            node collector/run.ts sweep
           fi
