@@ -15,7 +15,7 @@
 // Env: GITHUB_TOKEN, WORKER_URL, ADMIN_TOKEN, QUEUE_FILE (optional)
 
 import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS, SWEEP_KEYWORDS } from "./classify.ts";
+import { AI_LABS, classify, DISCOVERY_KEYWORDS, DISCOVERY_TOPICS, SWEEP_KEYWORDS } from "./classify.ts";
 import { fetchRetry, fromSearch, gql, pointsUsed, reposByName, searchRepos, type RepoMeta } from "./github.ts";
 import { spamReason } from "./spam.ts";
 
@@ -141,6 +141,8 @@ async function discover() {
   // Every page, not just the first: "ai" alone matches ~600 repos created in 14 days.
   for (const k of DISCOVERY_KEYWORDS) items.push(...(await searchAll(`${k} in:name,description,topics created:>=${since} fork:false`)));
   for (const t of DISCOVERY_TOPICS) items.push(...(await searchAll(`topic:${t} created:>=${since} fork:false`)));
+  // A lab's new repo (a model release) often has no AI word in it yet.
+  for (const part of chunk(AI_LABS, 10)) items.push(...(await searchAll(`${part.map((o) => `user:${o}`).join(" ")} created:>=${since} fork:false`)));
   // Any new repo that took off, AI keywords or not: the classifier decides.
   for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
   await ingest(items, "discover search");
@@ -172,6 +174,8 @@ async function sweep(minStars: number, only?: string) {
     await ingest(await searchAll(`${q} in:name,description ${base}`, minStars), `sweep "${k}"`, SWEEP_MIN_APPS_STARS);
   }
   if (only !== "keywords") for (const t of DISCOVERY_TOPICS) await ingest(await searchAll(`topic:${t} ${base}`, minStars), `sweep topic:${t}`, SWEEP_MIN_APPS_STARS);
+  // AI labs: their repos often carry no AI keyword or topic at all. Several user: qualifiers are ORed.
+  for (const part of chunk(AI_LABS, 10)) await ingest(await searchAll(`${part.map((o) => `user:${o}`).join(" ")} ${base}`, minStars), "sweep labs");
 }
 
 /** Applies the current classifier to every tracked repo, using fresh name/description/topics. */
