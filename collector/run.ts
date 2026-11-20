@@ -305,9 +305,11 @@ switch (cmd) {
     await sweep(Number(args[0] ?? MIN_STARS), args[1]);
     break;
   case "find": {
-    // Sweep a few keywords only, e.g. after adding them: find "vector database" retrieval
+    // Sweep a few keywords only, e.g. after adding them. Comma-separated, since the workflow splits its input
+    // on spaces: find vector database,similarity search,retrieval
     const base = `fork:false archived:false pushed:>=${daysAgo(365)}`;
-    for (const k of args) await ingest(await searchAll(`${k.includes(" ") ? `"${k}"` : k} in:name,description ${base}`), `find "${k}"`, SWEEP_MIN_APPS_STARS);
+    const keywords = args.join(" ").split(",").map((k) => k.trim()).filter(Boolean);
+    for (const k of keywords) await ingest(await searchAll(`${k.includes(" ") ? `"${k}"` : k} in:name,description ${base}`), `find "${k}"`, SWEEP_MIN_APPS_STARS);
     break;
   }
   case "reclassify":
