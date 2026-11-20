@@ -32,7 +32,7 @@ const obsDay = () => day(new Date(Date.now() - 3 * 3600e3));
 const chunk = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
 const QUEUE_FILE = process.env.QUEUE_FILE;
-const WRITE_PATHS = new Set(["/admin/repos", "/admin/snapshots", "/admin/rank", "/admin/hide", "/admin/categories"]);
+const WRITE_PATHS = new Set(["/admin/repos", "/admin/snapshots", "/admin/rank", "/admin/hide", "/admin/categories", "/admin/gh-trending"]);
 
 async function admin<T = any>(path: string, body?: unknown): Promise<T> {
   if (QUEUE_FILE && WRITE_PATHS.has(path)) {
@@ -44,8 +44,13 @@ async function admin<T = any>(path: string, body?: unknown): Promise<T> {
     headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${path} → ${res.status} ${await res.text()}`);
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${path} → ${res.status} ${text}`);
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${path} → ${res.status}, unreadable body (${text.length} bytes)`);
+  }
 }
 
 // ---------- discovery ----------
@@ -113,9 +118,11 @@ async function seed(topics: string[]) {
 // on its language's page. Daily pages only: that is where a sudden spike appears.
 const TRENDING_LANGUAGES = ["python", "typescript", "javascript", "jupyter-notebook", "rust", "go", "c++", "shell", "swift", "html", "java", "c"];
 
-/** Repos on GitHub Trending, with "stars today" from the daily pages (lowercase name → stars today, or null). */
-async function githubTrending(): Promise<Map<string, number | null>> {
+/** Repos on GitHub Trending, with "stars today" from the daily pages (lowercase name → stars today, or null),
+ * and every position seen: list is 'all' / 'all-weekly' / 'all-monthly' for the main page, else the language slug. */
+async function githubTrending(): Promise<{ found: Map<string, number | null>; positions: { name: string; list: string; rank: number }[] }> {
   const found = new Map<string, number | null>();
+  const positions: { name: string; list: string; rank: number }[] = [];
   const pages = [
     ...["daily", "weekly", "monthly"].map((since) => `https://github.com/trending?since=${since}`),
     ...TRENDING_LANGUAGES.map((l) => `https://github.com/trending/${encodeURIComponent(l)}?since=daily`),
@@ -124,15 +131,20 @@ async function githubTrending(): Promise<Map<string, number | null>> {
     const res = await fetchRetry(url, { headers: { "user-agent": "Mozilla/5.0" } }).catch(() => null);
     if (!res?.ok) continue;
     const daily = url.endsWith("since=daily");
+    const lang = url.match(/\/trending\/([^?]+)/)?.[1];
+    const since = url.match(/since=(\w+)/)![1];
+    const list = lang ? decodeURIComponent(lang) : since === "daily" ? "all" : `all-${since}`;
+    let rank = 0;
     for (const article of (await res.text()).split('<article class="Box-row">').slice(1)) {
       const name = article.match(/<h2 class="h3 lh-condensed">\s*<a[^>]*href="\/([\w.-]+\/[\w.-]+)"/)?.[1]?.toLowerCase();
       if (!name) continue;
+      positions.push({ name, list, rank: ++rank });
       const today = daily ? article.match(/([\d,]+)\s+stars?\s+today/)?.[1] : undefined;
       if (today) found.set(name, Number(today.replace(/,/g, "")));
       else if (!found.has(name)) found.set(name, null);
     }
   }
-  return found;
+  return { found, positions };
 }
 
 async function discover() {
@@ -147,7 +159,7 @@ async function discover() {
   for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
   await ingest(items, "discover search");
 
-  const trendingNames = await githubTrending();
+  const { found: trendingNames, positions } = await githubTrending();
   // Yesterday's count of a repo first seen while trending: without it, its first observation (already after the
   // spike) would be the baseline and today's gain would be 0.
   const trending = (await reposByName([...trendingNames.keys()])).map((r) => {
@@ -160,6 +172,10 @@ async function discover() {
   const known = new Set(await admin<number[]>("/admin/known", { ids: trending.map((r) => r.id) }));
   const counts = trending.filter((r) => known.has(r.id) || sentIds.has(r.id)).map((r) => ({ id: r.id, stars: r.stars, forks: r.forks }));
   if (counts.length) await admin("/admin/snapshots", { items: counts, day: obsDay() });
+  // Positions on GitHub Trending, for the repo pages. The Worker keeps tracked repos only and the best position of the day.
+  const ids = new Map(trending.map((r) => [r.full_name.toLowerCase(), r.id]));
+  const ghItems = positions.flatMap((p) => (ids.has(p.name) ? [{ id: ids.get(p.name)!, list: p.list, rank: p.rank }] : []));
+  if (ghItems.length) await admin("/admin/gh-trending", { items: ghItems, day: obsDay() });
 }
 
 /** In a sweep sample, half the older "apps" below this were off-niche (tensorflow/docs, subscription trackers...).

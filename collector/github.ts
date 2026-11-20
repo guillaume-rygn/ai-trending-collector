@@ -53,11 +53,23 @@ async function request(url: string, init: RequestInit = {}, attempt = 0): Promis
 }
 
 export async function gql<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-  const res = await request("https://api.github.com/graphql", {
-    method: "POST",
-    body: JSON.stringify({ query: query.replace(/}\s*$/, " rateLimit { cost remaining resetAt } }"), variables }),
-  });
-  const body = (await res.json()) as any;
+  let body: any;
+  // GitHub sometimes answers 200 with an empty or cut-off body on large node queries: retry rather than lose the run.
+  for (let attempt = 0; ; attempt++) {
+    const res = await request("https://api.github.com/graphql", {
+      method: "POST",
+      body: JSON.stringify({ query: query.replace(/}\s*$/, " rateLimit { cost remaining resetAt } }"), variables }),
+    });
+    const text = await res.text().catch(() => "");
+    try {
+      body = JSON.parse(text);
+      break;
+    } catch {
+      if (attempt >= 4) throw new Error(`GraphQL: unreadable response (${res.status}, ${text.length} bytes)`);
+      console.warn(`GraphQL: unreadable response (${res.status}, ${text.length} bytes), retrying`);
+      await sleep(2 ** attempt * 2000);
+    }
+  }
   // Errors for individual missing/renamed repos are expected; only fail when nothing came back.
   if (!body.data) throw new Error(`GraphQL error: ${JSON.stringify(body.errors ?? body)}`);
   const rl = body.data.rateLimit;
