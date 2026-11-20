@@ -19,8 +19,9 @@ const rules: [Category, RegExp][] = [
   ["mcp", /\bmcp\b|model[- ]context[- ]protocol|mcp[- ]?server/],
   ["skills", /\bskills?\b.*\b(claude|agent|codex|cursor)|\b(claude|agent|codex)[- ]skills?\b|agent-skills|cursor[- ]?rules|\bclaude\.md\b|\bagents\.md\b|prompt[- ]?(library|collection)|system[- ]prompts?|subagents?|slash[- ]commands?|claude[- ]code[- ]plugins?/],
   ["coding", /claude[- ]code|codex[- ]cli|coding[- ]agents?|ai[- ]coding|code[- ]assistant|copilot|vibe[- ]?coding|ai[- ]ide|\bcodex\b|gemini[- ]cli|opencode|aider|cursor\b/],
+  // Before agents: memory layers and RAG engines describe themselves as "for AI agents" and tag "agent-memory".
+  ["rag", /\brag\b|retrieval|vector[- ]?(db|database|search|store)|embeddings?|knowledge[- ]graphs?|graphrag|semantic[- ]search|(long[- ]term|persistent|agentic|agent|ai|llm)[- ]memory|memory[- ](layer|engine|api|system|platform|infrastructure|framework|server|store|graph|management)|memory (for|of) (ai|llms?|agents?)|context[- ]engine|知识库|检索增强/],
   ["agents", /\bagents?\b|智能体|多智能体|agentic|multi[- ]agent|autonomous|langgraph|crewai|autogen|computer[- ]use|browser[- ]use|a2a\b/],
-  ["rag", /\brag\b|retrieval|vector[- ]?(db|database|search|store)|embeddings?|knowledge[- ]graph|graphrag|semantic[- ]search|long[- ]term[- ]memory|agent[- ]memory/],
   ["models", /\bllama\b|\bvllm\b|inference|fine[- ]?tun|\blora\b|quantiz|gguf|\bonnx\b|transformers?\b|diffusion|text[- ]to[- ](speech|image|video)|\btts\b|speech[- ]to[- ]text|speech recognition|\basr\b|whisper|world[- ]model|foundation[- ]models?|image[- ]generation|video[- ]generation|vision[- ]language|reinforcement[- ]learning|\bvlm\b|multimodal|pretrain|distill|\bmoe\b|大模型|大语言模型|语言模型|多模态|语音识别|语音合成|文生图|文生视频/],
   ["apps", /\bllms?\b|\bgpt\b|chatgpt|openai|anthropic|\bclaude\b|gemini|deepseek|qwen|mistral|ollama|\bgenai\b|generative[- ]ai|\bai\b|artificial[- ]intelligence|chatbot|prompt|large[- ]language[- ]model|machine[- ]learning|deep[- ]learning|neural|人工智能|机器学习|深度学习/],
 ];
