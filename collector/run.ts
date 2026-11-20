@@ -304,6 +304,12 @@ switch (cmd) {
   case "sweep":
     await sweep(Number(args[0] ?? MIN_STARS), args[1]);
     break;
+  case "find": {
+    // Sweep a few keywords only, e.g. after adding them: find "vector database" retrieval
+    const base = `fork:false archived:false pushed:>=${daysAgo(365)}`;
+    for (const k of args) await ingest(await searchAll(`${k.includes(" ") ? `"${k}"` : k} in:name,description ${base}`), `find "${k}"`, SWEEP_MIN_APPS_STARS);
+    break;
+  }
   case "reclassify":
     await reclassify();
     break;
