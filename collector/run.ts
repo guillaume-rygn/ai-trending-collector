@@ -155,8 +155,11 @@ async function discover() {
   for (const t of DISCOVERY_TOPICS) items.push(...(await searchAll(`topic:${t} created:>=${since} fork:false`)));
   // A lab's new repo (a model release) often has no AI word in it yet.
   for (const part of chunk(AI_LABS, 10)) items.push(...(await searchAll(`${part.map((o) => `user:${o}`).join(" ")} created:>=${since} fork:false`)));
-  // Any new repo that took off, AI keywords or not: the classifier decides.
-  for (let p = 1; p <= 3; p++) items.push(...(await searchRepos(`created:>=${daysAgo(3)} stars:>=${MIN_STARS * 2} fork:false`, p)).items.map(fromSearch));
+  // Any new repo that took off, AI keywords or not: the classifier decides. Every result, not the first 300
+  // (a coverage check on 2026-11-20 found 6% of 30-day-old AI repos with 200+ stars missing): last 7 days from
+  // 40 stars, last 30 days from 200 stars.
+  items.push(...(await searchAll(`created:>=${daysAgo(7)} fork:false`, MIN_STARS * 2)));
+  items.push(...(await searchAll(`created:>=${daysAgo(30)} fork:false`, 200)));
   await ingest(items, "discover search");
 
   const { found: trendingNames, positions } = await githubTrending();
